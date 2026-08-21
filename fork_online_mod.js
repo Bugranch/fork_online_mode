@@ -1499,12 +1499,12 @@
         var select_title = '';
         var prefer_http = Lampa.Storage.field('online_mod_prefer_http') === true;
         var prefer_mp4 = Lampa.Storage.field('online_mod_prefer_mp4') === true;
-        
+
         // Основной домен и зеркала
         var host = 'https://lordfilm.fl';
         var ref = host + '/';
         var prox = component.proxy('lordfilm');
-        
+
         // User-Agent и заголовки
         var user_agent = Utils.baseUserAgent();
         var headers = Lampa.Platform.is('android') ? {
@@ -1512,7 +1512,7 @@
             'Referer': ref,
             'User-Agent': user_agent
         } : {};
-        
+
         // Прокси-заголовки
         var prox_enc = '';
         if (prox) {
@@ -1520,7 +1520,7 @@
             prox_enc += 'param/Referer=' + encodeURIComponent(ref) + '/';
             prox_enc += 'param/User-Agent=' + encodeURIComponent(user_agent) + '/';
         }
-        
+
         // Фильтры и выбор
         var filter_items = {};
         var choice = {
@@ -1538,12 +1538,12 @@
             object = _object;
             select_title = object.search || object.movie.title;
             error_message = '';
-            
+
             var search_date = object.search_date || 
                              (!object.clarification && (object.movie.release_date || object.movie.first_air_date)) || 
                              '0000';
             var search_year = parseInt((search_date + '').slice(0, 4));
-            
+
             // Собираем альтернативные названия
             var orig_titles = [];
             if (object.movie.alternative_titles && object.movie.alternative_titles.results) {
@@ -1551,13 +1551,13 @@
             }
             if (object.movie.original_title) orig_titles.push(object.movie.original_title);
             if (object.movie.original_name) orig_titles.push(object.movie.original_name);
-            
+
             // Формируем поисковый запрос
             var search_query = component.cleanTitle(select_title);
             var url = host + '/index.php?do=search';
             var postdata = 'do=search&subaction=search&search_start=0&full_search=0&result_from=1&story=' + 
                            encodeURIComponent(search_query);
-            
+
             // Выполняем поиск
             network.clear();
             network.timeout(15000);
@@ -1566,14 +1566,14 @@
                 function(str) {
                     str = (str || '').replace(/\n/g, '');
                     checkErrorForm(str);
-                    
+
                     // Парсим результаты поиска
                     var items = parseSearchResults(str);
-                    
+
                     if (items && items.length) {
                         // Фильтруем по году и названию
                         var filtered = filterSearchResults(items, orig_titles, search_year);
-                        
+
                         if (filtered.length === 1) {
                             // Если нашли точное совпадение - переходим на страницу
                             getPage(filtered[0].link);
@@ -1606,11 +1606,11 @@
             var items = [];
             var regex = /<div class="th-item">\s*<a href="([^"]+)"[^>]*>\s*<img[^>]+alt="([^"]+)"[^>]*>/gi;
             var match;
-            
+
             while ((match = regex.exec(html)) !== null) {
                 var link = match[1];
                 var title = match[2].trim();
-                
+
                 // Извлекаем год из названия
                 var year = null;
                 var yearMatch = title.match(/\((\d{4})\)/);
@@ -1618,7 +1618,7 @@
                     year = parseInt(yearMatch[1]);
                     title = title.replace(/\s*\(\d{4}\)\s*/, ' ').trim();
                 }
-                
+
                 items.push({
                     title: title,
                     orig_title: '',
@@ -1626,7 +1626,7 @@
                     link: fixLink(link, host)
                 });
             }
-            
+
             return items;
         }
 
@@ -1635,7 +1635,7 @@
          */
         function filterSearchResults(items, orig_titles, search_year) {
             var filtered = items;
-            
+
             // Фильтр по оригинальному названию
             if (orig_titles.length) {
                 var tmp = filtered.filter(function(c) {
@@ -1643,7 +1643,7 @@
                 });
                 if (tmp.length) filtered = tmp;
             }
-            
+
             // Фильтр по поисковому запросу
             if (select_title) {
                 var tmp = filtered.filter(function(c) {
@@ -1651,7 +1651,7 @@
                 });
                 if (tmp.length) filtered = tmp;
             }
-            
+
             // Фильтр по году
             if (filtered.length > 1 && search_year) {
                 var tmp = filtered.filter(function(c) {
@@ -1659,7 +1659,7 @@
                 });
                 if (tmp.length) filtered = tmp;
             }
-            
+
             return filtered;
         }
 
@@ -1691,10 +1691,10 @@
                 function(str) {
                     str = (str || '').replace(/\n/g, '');
                     checkErrorForm(str);
-                    
+
                     // Парсим страницу
                     var pageData = parsePage(str, url);
-                    
+
                     if (pageData && pageData.seasons && pageData.seasons.length) {
                         extract = pageData;
                         filter();
@@ -1722,18 +1722,18 @@
                 seasons: [],
                 voices: []
             };
-            
+
             // Извлекаем ID фильма
             var idMatch = html.match(/news_id\s*[:=]\s*['"]?(\d+)['"]?/i);
             if (!idMatch) return null;
             var newsId = idMatch[1];
-            
+
             // Парсим серии/сезоны
             var seriesMatch = html.match(/var\s+series\s*=\s*(\{.*?\});/s);
             if (seriesMatch) {
                 try {
                     var seriesData = eval('(' + seriesMatch[1] + ')');
-                    
+
                     // Парсим озвучки
                     var translators = {};
                     var transMatch = html.match(/var\s+translators\s*=\s*(\{.*?\});/s);
@@ -1742,19 +1742,19 @@
                             translators = eval('(' + transMatch[1] + ')');
                         } catch(e) {}
                     }
-                    
+
                     // Формируем структуру
                     for (var seasonId in seriesData) {
                         var episodes = seriesData[seasonId];
                         if (!Array.isArray(episodes)) continue;
-                        
+
                         var seasonNum = parseInt(seasonId);
                         var season = {
                             season_id: seasonNum,
                             title: 'Сезон ' + seasonNum,
                             episodes: []
                         };
-                        
+
                         episodes.forEach(function(epData, index) {
                             var episodeNum = index + 1;
                             var episode = {
@@ -1763,16 +1763,16 @@
                                 title: 'Серия ' + episodeNum,
                                 media: []
                             };
-                            
+
                             // Парсим ссылки для каждой озвучки
                             for (var voiceId in epData) {
                                 var voiceData = epData[voiceId];
                                 var voiceName = translators[voiceId] || 'Озвучка ' + voiceId;
-                                
+
                                 // Определяем качество
                                 var quality = '720p';
                                 var fileUrl = voiceData;
-                                
+
                                 // Если это массив с разными качествами
                                 if (Array.isArray(voiceData)) {
                                     // Берем максимальное качество
@@ -1784,7 +1784,7 @@
                                 } else if (typeof voiceData === 'string') {
                                     fileUrl = voiceData;
                                 }
-                                
+
                                 if (fileUrl) {
                                     episode.media.push({
                                         translation_id: voiceId,
@@ -1795,12 +1795,12 @@
                                     });
                                 }
                             }
-                            
+
                             if (episode.media.length) {
                                 season.episodes.push(episode);
                             }
                         });
-                        
+
                         if (season.episodes.length) {
                             result.seasons.push(season);
                         }
@@ -1809,7 +1809,7 @@
                     console.error('Error parsing series:', e);
                 }
             }
-            
+
             // Если это фильм (не сериал)
             if (!result.seasons.length) {
                 // Парсим плеер
@@ -1834,7 +1834,7 @@
                     });
                 }
             }
-            
+
             return result;
         }
 
@@ -2165,8 +2165,5 @@
             return new lordfilm(component, object);
         }
     });
-
-    // Остальные парсеры из оригинального мода (rezka2, и т.д.) 
-    // должны быть добавлены здесь
 
 })();
