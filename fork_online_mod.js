@@ -8394,8 +8394,7 @@
       var prox = component.proxy('lordfilm');
       var user_agent = Utils.baseUserAgent();
       var headers = {
-        'Referer': 'https://lordfilm.fi/',
-        'Origin': 'https://lordfilm.fi'
+        'Referer': 'https://lordfilm.fi/'
       };
       if (Lampa.Platform.is('android')) headers['User-Agent'] = user_agent;
       var prox_enc = '';
@@ -8434,8 +8433,8 @@
             extract = pageData;
             filter();
             append(filtred());
-          } else if (/access denied|forbidden|blocked|403|captcha/i.test(html || '')) {
-            component.empty('LordFilm: доступ заблокирован (403/антибот)');
+          } else if ((html || '').indexOf('makePlayer(') === -1) {
+            component.empty('LordFilm: сервер не отдал плеер (возможна блокировка/антибот)');
           } else component.emptyForQuery(select_title);
         }, function (a, c) {
           component.empty('LordFilm: ' + network.errorDecode(a, c));
@@ -8445,17 +8444,57 @@
         });
       }
       /**
-       * Достать JSON с seasons/episodes из ответа плеера
+       * Достать JSON с seasons/episodes из ответа плеера.
+       * Ищем "seasons:" и вручную считаем скобки, чтобы не зависеть
+       * от того, что именно идёт в тексте после массива (у фильмов и
+       * сериалов порядок соседних полей может отличаться).
        */
 
 
+      function extractBalancedArray(str, fromIndex) {
+        var start = str.indexOf('[', fromIndex);
+        if (start === -1) return null;
+        var depth = 0;
+        var inString = false;
+        var quoteChar = '';
+
+        for (var i = start; i < str.length; i++) {
+          var ch = str[i];
+
+          if (inString) {
+            if (ch === '\\') {
+              i++;
+            } else if (ch === quoteChar) {
+              inString = false;
+            }
+
+            continue;
+          }
+
+          if (ch === '"' || ch === '\'') {
+            inString = true;
+            quoteChar = ch;
+          } else if (ch === '[') {
+            depth++;
+          } else if (ch === ']') {
+            depth--;
+            if (depth === 0) return str.slice(start, i + 1);
+          }
+        }
+
+        return null;
+      }
+
       function parsePlayerPage(html) {
-        var match = (html || '').match(/seasons\s*:\s*(\[[\s\S]*?\])\s*\r?\n?\s*\}\s*,\s*qualityByWidth/);
-        if (!match) return null;
+        html = html || '';
+        var keyIndex = html.search(/seasons\s*:/);
+        if (keyIndex === -1) return null;
+        var arrayStr = extractBalancedArray(html, keyIndex);
+        if (!arrayStr) return null;
         var seasons;
 
         try {
-          seasons = JSON.parse(match[1]);
+          seasons = JSON.parse(arrayStr);
         } catch (e) {
           return null;
         }
