@@ -1,3 +1,5 @@
+//14.08.2026 - Fix
+
 (function () {
     'use strict';
 
@@ -8391,9 +8393,11 @@
       var select_title = '';
       var prox = component.proxy('lordfilm');
       var user_agent = Utils.baseUserAgent();
-      var headers = Lampa.Platform.is('android') ? {
-        'User-Agent': user_agent
-      } : {};
+      var headers = {
+        'Referer': 'https://lordfilm.fi/',
+        'Origin': 'https://lordfilm.fi'
+      };
+      if (Lampa.Platform.is('android')) headers['User-Agent'] = user_agent;
       var prox_enc = '';
       if (prox) prox_enc += 'param/User-Agent=' + encodeURIComponent(user_agent) + '/';
       var filter_items = {};
@@ -8430,9 +8434,11 @@
             extract = pageData;
             filter();
             append(filtred());
+          } else if (/access denied|forbidden|blocked|403|captcha/i.test(html || '')) {
+            component.empty('LordFilm: доступ заблокирован (403/антибот)');
           } else component.emptyForQuery(select_title);
         }, function (a, c) {
-          component.empty(network.errorDecode(a, c));
+          component.empty('LordFilm: ' + network.errorDecode(a, c));
         }, false, {
           dataType: 'text',
           headers: headers
