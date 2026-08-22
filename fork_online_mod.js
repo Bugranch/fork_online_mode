@@ -8387,46 +8387,84 @@
     function lordfilm(component, _object) {
       var network = new Lampa.Reguest();
       var extract = {
-        seasons: []
+        seasons: [],
+        isMovie: false
       };
       var object = _object;
       var select_title = '';
-      var prox = component.proxy('lordfilm');
-      var user_agent = Utils.baseUserAgent();
-      var headers = {
-        'Referer': 'https://lordfilm.fi/'
-      };
-      if (Lampa.Platform.is('android')) headers['User-Agent'] = user_agent;
-      var prox_enc = '';
-      if (prox) prox_enc += 'param/User-Agent=' + encodeURIComponent(user_agent) + '/';
       var filter_items = {};
       var choice = {
         season: 0
       };
+      var API_HOST = 'https://api.ortified.ws';
+      var API_HOST_NAME = 'lordfilm.fi';
+      var API_TIMEOUT = 15000; // Прокси намеренно НЕ используется по умолчанию (тумблер online_mod_proxy_lordfilm = false):
+      // общий CORS-воркер (cors.nb557.workers.dev) заточен под домены остальных
+      // балансеров и на постороннем домене api.ortified.ws отдаёт 422.
+      // component.proxy()/proxyLink() оставлены в коде — если когда-нибудь
+      // понадобится проксировать (например, при гео-блокировке), достаточно
+      // включить тумблер в настройках, ничего в коде менять не придётся.
+
+      var prox = component.proxy('lordfilm');
+      var user_agent = Utils.baseUserAgent();
+      var headers = Lampa.Platform.is('android') ? {
+        'User-Agent': user_agent
+      } : {};
+      var prox_enc = '';
+      if (prox) prox_enc += 'param/User-Agent=' + encodeURIComponent(user_agent) + '/';
       /**
-       * Начать поиск
-       * @param {Object} _object
-       * @param {String} kinopoisk_id
+       * Поиск — используем kinopoisk_id напрямую, свою разметку lordfilm.fi не трогаем
        */
 
       this.search = function (_object, kinopoisk_id) {
         object = _object;
         select_title = object.search || object.movie.title;
 
-        if (!kinopoisk_id) {
+        if (!kinopoisk_id || isNaN(kinopoisk_id)) {
           component.emptyForQuery(select_title);
           return;
         }
 
-        getPage(kinopoisk_id);
+        getPage(parseInt(kinopoisk_id, 10));
       };
 
-      function getPage(kp_id) {
-        component.loading(true);
-        var url = 'https://api.ortified.ws/embed/kp/' + encodeURIComponent(kp_id) + '?host=lordfilm.fi';
+      this.extendChoice = function (saved) {
+        Lampa.Arrays.extend(choice, saved, true);
+      };
+
+      this.reset = function () {
+        component.reset();
+        choice = {
+          season: 0
+        };
+        filter();
+        append(filtred());
+        component.saveChoice(choice);
+      };
+
+      this.filter = function (type, a, b) {
+        if (a && a.stype) choice[a.stype] = b.index;
+        component.reset();
+        filter();
+        append(filtred());
+        component.saveChoice(choice);
+      };
+
+      this.destroy = function () {
         network.clear();
-        network.timeout(15000);
+        extract = null;
+      };
+      /**
+       * Запрос к API плеера
+       */
+
+      function getPage(kp_id) {
+        var url = API_HOST + '/embed/kp/' + encodeURIComponent(kp_id) + '?host=' + encodeURIComponent(API_HOST_NAME);
+        component.loading(true);
+        network.clear();
+        network.timeout(API_TIMEOUT);
         network["native"](component.proxyLink(url, prox, prox_enc, 'enc2t'), function (html) {
+          component.loading(false);
           var pageData = parsePlayerPage(html);
 
           if (pageData && pageData.seasons && pageData.seasons.length) {
@@ -8435,8 +8473,11 @@
             append(filtred());
           } else if ((html || '').indexOf('makePlayer(') === -1) {
             component.empty('LordFilm: сервер не отдал плеер (возможна блокировка/антибот)');
-          } else component.emptyForQuery(select_title);
+          } else {
+            component.emptyForQuery(select_title);
+          }
         }, function (a, c) {
+          component.loading(false);
           component.empty('LordFilm: ' + network.errorDecode(a, c));
         }, false, {
           dataType: 'text',
@@ -8444,147 +8485,165 @@
         });
       }
       /**
-       * Достать данные плеера из ответа.
-       * У сериалов верхнеуровневый ключ "seasons: [...]" (валидный JSON-массив).
-       * У фильмов вместо этого "source: {...}" (JS-литерал с НЕэкранированными
-       * ключами) — там уже руками достаём нужные поля (hls/audio/cc/title).
+       * Поиск сбалансированного [...] или {...} по имени ключа "key: ..."
+       * Отклоняет ложные совпадения (когда после key: идёт не [ / {),
+       * ищет следующее вхождение key, если совпадение не подтвердилось.
        */
 
 
-      function extractBalancedArray(str, fromIndex) {
-        var start = str.indexOf('[', fromIndex);
-        if (start === -1) return null;
-        var depth = 0;
-        var inString = false;
-        var quoteChar = '';
+      function extractBalanced(str, key, openCh, closeCh) {
+        if (!str || !key) return null;
+        var key_pos = str.indexOf(key);
 
-        for (var i = start; i < str.length; i++) {
-          var ch = str[i];
+        while (key_pos !== -1) {
+          var colon = str.indexOf(':', key_pos + key.length);
+          if (colon === -1) return null;
+          var start = colon + 1;
 
-          if (inString) {
-            if (ch === '\\') {
-              i++;
-            } else if (ch === quoteChar) {
-              inString = false;
-            }
+          while (start < str.length && /\s/.test(str.charAt(start))) {
+            start++;
+          }
 
+          if (str.charAt(start) !== openCh) {
+            key_pos = str.indexOf(key, key_pos + key.length);
             continue;
           }
 
-          if (ch === '"' || ch === '\'') {
-            inString = true;
-            quoteChar = ch;
-          } else if (ch === '[') {
-            depth++;
-          } else if (ch === ']') {
-            depth--;
-            if (depth === 0) return str.slice(start, i + 1);
+          var depth = 0;
+          var quote = '';
+          var escaped = false;
+
+          for (var i = start; i < str.length; i++) {
+            var ch = str.charAt(i);
+
+            if (quote) {
+              if (escaped) escaped = false;else if (ch === '\\') escaped = true;else if (ch === quote) quote = '';
+              continue;
+            }
+
+            if (ch === '"' || ch === "'") {
+              quote = ch;
+              continue;
+            }
+
+            if (ch === openCh) {
+              depth++;
+            } else if (ch === closeCh) {
+              depth--;
+              if (depth === 0) return str.substring(start, i + 1);
+            }
           }
+
+          return null;
         }
 
         return null;
       }
 
-      function extractBalancedObject(str, fromIndex) {
-        var start = str.indexOf('{', fromIndex);
-        if (start === -1) return null;
-        var depth = 0;
-        var inString = false;
-        var quoteChar = '';
+      function extractBalancedArray(str, key) {
+        return extractBalanced(str, key, '[', ']');
+      }
 
-        for (var i = start; i < str.length; i++) {
-          var ch = str[i];
-
-          if (inString) {
-            if (ch === '\\') {
-              i++;
-            } else if (ch === quoteChar) {
-              inString = false;
-            }
-
-            continue;
-          }
-
-          if (ch === '"' || ch === '\'') {
-            inString = true;
-            quoteChar = ch;
-          } else if (ch === '{') {
-            depth++;
-          } else if (ch === '}') {
-            depth--;
-            if (depth === 0) return str.slice(start, i + 1);
-          }
-        }
-
-        return null;
+      function extractBalancedObject(str, key) {
+        return extractBalanced(str, key, '{', '}');
       }
 
       function extractStringField(str, key) {
-        var m = str.match(new RegExp('\\b' + key + '\\s*:\\s*"([^"]*)"')) || str.match(new RegExp('\\b' + key + '\\s*:\\s*\'([^\']*)\''));
+        var m = str.match(new RegExp('\\b' + key + '\\s*:\\s*"([^"]*)"')) || str.match(new RegExp("\\b" + key + "\\s*:\\s*'([^']*)'"));
         return m ? m[1] : '';
       }
 
-      function parseSeries(html) {
-        var keyIndex = html.search(/seasons\s*:/);
-        if (keyIndex === -1) return null;
-        var arrayStr = extractBalancedArray(html, keyIndex);
+      function isValidHls(url) {
+        return typeof url === 'string' && !!url && /\.m3u8(?:$|[?#])/i.test(url);
+      }
+      /**
+       * Разбор ответа плеера.
+       * Вариант 1: сериал — "seasons: [...]" (валидный JSON-массив).
+       * Вариант 2: фильм — "source: {...}" (JS-литерал с неэкранированными
+       * ключами: hls/dash/audio/cc), заворачивается в тот же формат seasons,
+       * чтобы дальше по коду (filter/filtred/getStream) всё было единообразно.
+       */
+
+
+      function parseSeries(str) {
+        var arrayStr = extractBalancedArray(str, 'seasons');
         if (!arrayStr) return null;
         var seasons;
 
         try {
           seasons = JSON.parse(arrayStr);
         } catch (e) {
-          return null;
+          try {
+            seasons = JSON.parse(arrayStr.replace(/\\"/g, '"'));
+          } catch (e2) {
+            return null;
+          }
         }
 
-        seasons = seasons.filter(function (s) {
-          return !s.blocked;
-        }).map(function (s) {
-          s.episodes = (s.episodes || []).filter(function (ep) {
-            return ep.hls;
+        if (!seasons || !seasons.forEach) return null;
+        var result = [];
+        seasons.forEach(function (season, season_index) {
+          if (!season || season.blocked) return;
+          var season_num = parseInt(season.season != null ? season.season : season_index + 1, 10);
+          if (isNaN(season_num)) season_num = season_index + 1;
+          var episodes = season.episodes || [];
+          if (!episodes.forEach) return;
+          var valid_episodes = [];
+          episodes.forEach(function (episode, episode_index) {
+            if (!episode || !isValidHls(episode.hls)) return;
+            var episode_num = parseInt(episode.episode != null ? episode.episode : episode_index + 1, 10);
+            if (isNaN(episode_num)) episode_num = episode_index + 1;
+            var normalized = {};
+
+            for (var key in episode) {
+              normalized[key] = episode[key];
+            }
+
+            normalized.episode = episode_num;
+            valid_episodes.push(normalized);
           });
-          return s;
-        }).filter(function (s) {
-          return s.episodes.length;
+          if (valid_episodes.length) result.push({
+            season: season_num,
+            title: season.title || '',
+            episodes: valid_episodes
+          });
         });
-        return seasons.length ? seasons : null;
+        if (!result.length) return null;
+        result.sort(function (a, b) {
+          return a.season - b.season;
+        });
+        return result;
       }
 
-      function parseMovie(html) {
-        var keyIndex = html.search(/\bsource\s*:\s*\{/);
-        if (keyIndex === -1) return null;
-        var srcObj = extractBalancedObject(html, keyIndex);
+      function parseMovie(str) {
+        var srcObj = extractBalancedObject(str, 'source');
         if (!srcObj) return null;
         var hls = extractStringField(srcObj, 'hls');
-        if (!hls) return null;
+        if (!isValidHls(hls)) return null;
         var audio = {
           names: []
         };
-        var audioIdx = srcObj.search(/audio\s*:\s*\{/);
+        var audioObj = extractBalancedObject(srcObj, 'audio');
 
-        if (audioIdx !== -1) {
-          var audioObj = extractBalancedObject(srcObj, audioIdx);
-
+        if (audioObj) {
           try {
             audio = JSON.parse(audioObj);
           } catch (e) {}
         }
 
         var cc = [];
-        var ccIdx = srcObj.search(/cc\s*:\s*\[/);
+        var ccArr = extractBalancedArray(srcObj, 'cc');
 
-        if (ccIdx !== -1) {
-          var ccArr = extractBalancedArray(srcObj, ccIdx);
-
+        if (ccArr) {
           try {
             cc = JSON.parse(ccArr);
           } catch (e) {}
         }
 
-        var title = extractStringField(html, 'title');
+        var title = extractStringField(str, 'title');
         return [{
           season: 0,
-          blocked: false,
+          title: '',
           episodes: [{
             episode: '1',
             hls: hls,
@@ -8596,59 +8655,55 @@
       }
 
       function parsePlayerPage(html) {
-        html = html || '';
-        var seasons = parseSeries(html);
-        var isMovie = false;
+        if (!html) return null;
+        var str = String(html).replace(/\r/g, '');
+        var seasons = null;
+        var isMovie = false; // Вариант 0: сам endpoint вдруг стал отдавать чистый JSON
+
+        try {
+          var direct = JSON.parse(str);
+          if (direct && direct.seasons && direct.seasons.forEach) seasons = direct.seasons;else if (direct && direct.player && direct.player.seasons && direct.player.seasons.forEach) seasons = direct.player.seasons;
+        } catch (e) {}
+
+        if (!seasons) seasons = parseSeries(str);
 
         if (!seasons) {
-          seasons = parseMovie(html);
+          seasons = parseMovie(str);
           isMovie = true;
         }
 
-        return seasons && seasons.length ? {
+        if (!seasons || !seasons.length) return null;
+        return {
           seasons: seasons,
           isMovie: isMovie
-        } : null;
-      }
-
-      this.extendChoice = function (saved) {
-        Lampa.Arrays.extend(choice, saved, true);
-      };
-      /**
-       * Сброс фильтра
-       */
-
-
-      this.reset = function () {
-        component.reset();
-        choice = {
-          season: 0
         };
-        filter();
-        append(filtred());
-        component.saveChoice(choice);
-      };
+      }
       /**
-       * Применить фильтр
+       * Субтитры
        */
 
 
-      this.filter = function (type, a, b) {
-        choice[a.stype] = b.index;
-        component.reset();
-        filter();
-        append(filtred());
-        component.saveChoice(choice);
-      };
-      /**
-       * Уничтожить
-       */
-
-
-      this.destroy = function () {
-        network.clear();
-        extract = null;
-      };
+      function parseSubtitles(episode) {
+        if (!episode) return false;
+        var tracks = episode.subtitles || episode.subtitle || episode.cc || [];
+        if (!tracks) return false;
+        if (typeof tracks === 'string') return [{
+          label: 'Русский',
+          url: tracks
+        }];
+        if (!tracks.forEach) return false;
+        var subtitles = [];
+        tracks.forEach(function (track) {
+          if (!track) return;
+          var url = track.url || track.src || track.file || '';
+          if (!url) return;
+          subtitles.push({
+            label: track.name || track.label || track.lang || track.language || 'Subtitle',
+            url: url
+          });
+        });
+        return subtitles.length ? subtitles : false;
+      }
 
       function filter() {
         if (extract.isMovie) {
@@ -8668,16 +8723,18 @@
 
       function filtred() {
         var items = [];
+        if (!extract || !extract.seasons) return items;
 
         if (extract.isMovie) {
           var movie_season = extract.seasons[0];
           if (!movie_season) return items;
           movie_season.episodes.forEach(function (ep) {
             items.push({
-              title: (ep.title || select_title) + '',
+              title: ep.title || select_title,
               quality: '360p ~ 1080p',
               info: ep.audio && ep.audio.names && ep.audio.names.length ? ' / ' + Lampa.Utils.shortText(ep.audio.names.join(', '), 50) : '',
-              media: ep
+              media: ep,
+              subtitles: parseSubtitles(ep)
             });
           });
           return items;
@@ -8692,44 +8749,40 @@
             info: ep.audio && ep.audio.names && ep.audio.names.length ? ' / ' + Lampa.Utils.shortText(ep.audio.names.join(', '), 50) : '',
             season: season.season,
             episode: parseInt(ep.episode, 10),
-            media: ep
+            media: ep,
+            subtitles: parseSubtitles(ep)
           });
         });
         return items;
       }
+      /**
+       * Поток — HLS-ссылку не проксируем (API уже отдаёт готовый прямой урл,
+       * а общий CORS-воркер под это не рассчитан и может сломать относительные
+       * сегменты внутри m3u8-манифеста)
+       */
+
 
       function getStream(element, call, error) {
         if (element.stream) return call(element);
         var ep = element.media;
-        if (!ep || !ep.hls) return error();
-        element.stream = component.proxyLink(ep.hls, prox, prox_enc);
+        if (!ep || !isValidHls(ep.hls)) return error();
+        element.stream = Utils.fixLinkProtocol(ep.hls, Lampa.Storage.field('online_mod_prefer_http') === true, true);
         element.qualitys = false;
-        element.subtitles = ep.cc && ep.cc.length ? ep.cc.map(function (c) {
-          return {
-            label: c.name,
-            url: component.proxyLink(c.url, prox, prox_enc)
-          };
-        }) : false;
+        if (!element.subtitles) element.subtitles = parseSubtitles(ep);
         call(element);
       }
-      /**
-       * Показать файлы
-       */
-
 
       function append(items) {
         component.reset();
         var viewed = Lampa.Storage.cache('online_view', 5000, []);
         var last_episode = component.getLastEpisode(items);
         items.forEach(function (element) {
-          if (element.season) {
-            element.translate_episode_end = last_episode;
-          }
-
-          var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
+          if (element.season) element.translate_episode_end = last_episode;
+          var original_title = object.movie.original_title || object.movie.original_name || select_title;
+          var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, original_title].join('') : original_title);
           var view = Lampa.Timeline.view(hash);
           var item = Lampa.Template.get('online_mod', element);
-          var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title + element.title);
+          var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, original_title].join('') : original_title + element.title);
           element.timeline = view;
           item.append(Lampa.Timeline.render(view));
 
@@ -8814,6 +8867,7 @@
         component.start(true);
       }
     }
+
 
     function redheadsound(component, _object, prefer_dash) {
       var network = new Lampa.Reguest();
@@ -13960,7 +14014,7 @@
       Lampa.Storage.set('online_mod_proxy_vibix', Lampa.Platform.is('android') ? 'false' : 'true');
       Lampa.Storage.set('online_mod_proxy_redheadsound', Lampa.Platform.is('android') ? 'false' : 'true');
       Lampa.Storage.set('online_mod_proxy_cdnvideohub', 'false');
-      Lampa.Storage.set('online_mod_proxy_lordfilm', 'true');
+      Lampa.Storage.set('online_mod_proxy_lordfilm', 'false');
       Lampa.Storage.set('online_mod_proxy_videodb', 'false');
       Lampa.Storage.set('online_mod_proxy_zetflix', 'false');
       Lampa.Storage.set('online_mod_proxy_kinopub', 'true');
@@ -15257,8 +15311,9 @@
         template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_vibix\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} Vibix</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
         template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_redheadsound\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} RedHeadSound</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
         template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_cdnvideohub\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} CDNVideoHub</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
-        template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_lordfilm\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} LordFilm</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
       }
+
+      template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_lordfilm\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} LordFilm</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
 
       template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_anilibria\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} AniLibria</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
       template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_anilibria2\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} AniLibria.top</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
