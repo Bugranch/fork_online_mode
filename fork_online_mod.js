@@ -8425,11 +8425,7 @@
         prox_enc_stream += 'param/Referer=' + encodeURIComponent(ref) + '/';
       }
 
-      var play_headers = !prox && Lampa.Platform.is('android') ? {
-        'User-Agent': user_agent,
-        'Origin': host,
-        'Referer': ref
-      } : {};
+      var play_headers = {};
       var filter_items = {};
       var choice = {
         season: 0,
