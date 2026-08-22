@@ -8444,10 +8444,10 @@
         });
       }
       /**
-       * Достать JSON с seasons/episodes из ответа плеера.
-       * Ищем "seasons:" и вручную считаем скобки, чтобы не зависеть
-       * от того, что именно идёт в тексте после массива (у фильмов и
-       * сериалов порядок соседних полей может отличаться).
+       * Достать данные плеера из ответа.
+       * У сериалов верхнеуровневый ключ "seasons: [...]" (валидный JSON-массив).
+       * У фильмов вместо этого "source: {...}" (JS-литерал с НЕэкранированными
+       * ключами) — там уже руками достаём нужные поля (hls/audio/cc/title).
        */
 
 
@@ -8485,8 +8485,46 @@
         return null;
       }
 
-      function parsePlayerPage(html) {
-        html = html || '';
+      function extractBalancedObject(str, fromIndex) {
+        var start = str.indexOf('{', fromIndex);
+        if (start === -1) return null;
+        var depth = 0;
+        var inString = false;
+        var quoteChar = '';
+
+        for (var i = start; i < str.length; i++) {
+          var ch = str[i];
+
+          if (inString) {
+            if (ch === '\\') {
+              i++;
+            } else if (ch === quoteChar) {
+              inString = false;
+            }
+
+            continue;
+          }
+
+          if (ch === '"' || ch === '\'') {
+            inString = true;
+            quoteChar = ch;
+          } else if (ch === '{') {
+            depth++;
+          } else if (ch === '}') {
+            depth--;
+            if (depth === 0) return str.slice(start, i + 1);
+          }
+        }
+
+        return null;
+      }
+
+      function extractStringField(str, key) {
+        var m = str.match(new RegExp('\\b' + key + '\\s*:\\s*"([^"]*)"')) || str.match(new RegExp('\\b' + key + '\\s*:\\s*\'([^\']*)\''));
+        return m ? m[1] : '';
+      }
+
+      function parseSeries(html) {
         var keyIndex = html.search(/seasons\s*:/);
         if (keyIndex === -1) return null;
         var arrayStr = extractBalancedArray(html, keyIndex);
@@ -8509,8 +8547,67 @@
         }).filter(function (s) {
           return s.episodes.length;
         });
-        return seasons.length ? {
-          seasons: seasons
+        return seasons.length ? seasons : null;
+      }
+
+      function parseMovie(html) {
+        var keyIndex = html.search(/\bsource\s*:\s*\{/);
+        if (keyIndex === -1) return null;
+        var srcObj = extractBalancedObject(html, keyIndex);
+        if (!srcObj) return null;
+        var hls = extractStringField(srcObj, 'hls');
+        if (!hls) return null;
+        var audio = {
+          names: []
+        };
+        var audioIdx = srcObj.search(/audio\s*:\s*\{/);
+
+        if (audioIdx !== -1) {
+          var audioObj = extractBalancedObject(srcObj, audioIdx);
+
+          try {
+            audio = JSON.parse(audioObj);
+          } catch (e) {}
+        }
+
+        var cc = [];
+        var ccIdx = srcObj.search(/cc\s*:\s*\[/);
+
+        if (ccIdx !== -1) {
+          var ccArr = extractBalancedArray(srcObj, ccIdx);
+
+          try {
+            cc = JSON.parse(ccArr);
+          } catch (e) {}
+        }
+
+        var title = extractStringField(html, 'title');
+        return [{
+          season: 0,
+          blocked: false,
+          episodes: [{
+            episode: '1',
+            hls: hls,
+            audio: audio,
+            cc: cc,
+            title: title
+          }]
+        }];
+      }
+
+      function parsePlayerPage(html) {
+        html = html || '';
+        var seasons = parseSeries(html);
+        var isMovie = false;
+
+        if (!seasons) {
+          seasons = parseMovie(html);
+          isMovie = true;
+        }
+
+        return seasons && seasons.length ? {
+          seasons: seasons,
+          isMovie: isMovie
         } : null;
       }
 
@@ -8554,6 +8651,12 @@
       };
 
       function filter() {
+        if (extract.isMovie) {
+          filter_items = {};
+          component.filter(filter_items, choice);
+          return;
+        }
+
         filter_items = {
           season: extract.seasons.map(function (s) {
             return Lampa.Lang.translate('torrent_serial_season') + ' ' + s.season;
@@ -8565,6 +8668,21 @@
 
       function filtred() {
         var items = [];
+
+        if (extract.isMovie) {
+          var movie_season = extract.seasons[0];
+          if (!movie_season) return items;
+          movie_season.episodes.forEach(function (ep) {
+            items.push({
+              title: (ep.title || select_title) + '',
+              quality: '360p ~ 1080p',
+              info: ep.audio && ep.audio.names && ep.audio.names.length ? ' / ' + Lampa.Utils.shortText(ep.audio.names.join(', '), 50) : '',
+              media: ep
+            });
+          });
+          return items;
+        }
+
         var season = extract.seasons[choice.season];
         if (!season) return items;
         season.episodes.forEach(function (ep) {
@@ -13842,6 +13960,7 @@
       Lampa.Storage.set('online_mod_proxy_vibix', Lampa.Platform.is('android') ? 'false' : 'true');
       Lampa.Storage.set('online_mod_proxy_redheadsound', Lampa.Platform.is('android') ? 'false' : 'true');
       Lampa.Storage.set('online_mod_proxy_cdnvideohub', 'false');
+      Lampa.Storage.set('online_mod_proxy_lordfilm', 'true');
       Lampa.Storage.set('online_mod_proxy_videodb', 'false');
       Lampa.Storage.set('online_mod_proxy_zetflix', 'false');
       Lampa.Storage.set('online_mod_proxy_kinopub', 'true');
@@ -13871,6 +13990,7 @@
       Lampa.Params.trigger('online_mod_proxy_vibix', false);
       Lampa.Params.trigger('online_mod_proxy_redheadsound', false);
       Lampa.Params.trigger('online_mod_proxy_cdnvideohub', false);
+      Lampa.Params.trigger('online_mod_proxy_lordfilm', false);
       Lampa.Params.trigger('online_mod_proxy_anilibria', false);
       Lampa.Params.trigger('online_mod_proxy_anilibria2', false);
       Lampa.Params.trigger('online_mod_proxy_animelib', false);
@@ -15137,6 +15257,7 @@
         template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_vibix\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} Vibix</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
         template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_redheadsound\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} RedHeadSound</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
         template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_cdnvideohub\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} CDNVideoHub</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
+        template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_lordfilm\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} LordFilm</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
       }
 
       template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_anilibria\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} AniLibria</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
