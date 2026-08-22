@@ -1,5 +1,3 @@
-//14.08.2026 - Fix
-
 (function () {
     'use strict';
 
