@@ -1490,7 +1490,7 @@
     }
 
     // ============================================================
-    // Парсер для lordfilm.fl
+    // Парсер для lordfilm.fi
     // ============================================================
     function lordfilm(component, _object) {
         var network = new Lampa.Reguest();
@@ -1501,7 +1501,7 @@
         var prefer_mp4 = Lampa.Storage.field('online_mod_prefer_mp4') === true;
 
         // Основной домен и зеркала
-        var host = 'https://lordfilm.fl';
+        var host = 'https://lordfilm.fi';
         var ref = host + '/';
         var prox = component.proxy('lordfilm');
 
