@@ -8567,9 +8567,14 @@
         component.filter(filter_items, choice);
       }
 
-      function fixUrl(url) {
+      function fixUrl(url, add) {
         url = url || '';
-        url = component.fixLinkProtocol(url, prefer_http);
+
+        if (url && add) {
+          url += atob('JnZw');
+        }
+
+        url = component.fixLinkProtocol(url, prefer_http, true);
         return url;
       }
       /**
@@ -8605,7 +8610,7 @@
                 }).filter(function (name) {
                   return name && name !== 'delete';
                 });
-                var file = fixUrl(episode.hls || '');
+                var file = fixUrl(episode.hls || '', true);
                 filtred.push({
                   title: episode.title,
                   quality: '360p ~ 1080p',
@@ -8614,7 +8619,7 @@
                   episode: parseInt(episode.episode),
                   file: component.proxyLink(file, prox, prox_enc_stream),
                   subtitles: episode.cc ? episode.cc.map(function (c) {
-                    var url = fixUrl(c.url || '');
+                    var url = fixUrl(c.url || '', false);
                     return {
                       label: c.name,
                       url: component.processSubs(component.proxyLink(url, prox, prox_enc_stream))
@@ -8652,14 +8657,14 @@
           }).filter(function (name) {
             return name && name !== 'delete';
           });
-          var file = fixUrl(extract.source.hls || '');
+          var file = fixUrl(extract.source.hls || '', true);
           filtred.push({
             title: extract.title || select_title,
             quality: max_quality ? max_quality + 'p' : '360p ~ 720p',
             info: audio_names.length ? ' / ' + component.uniqueNamesShortText(audio_names, 80) : '',
             file: component.proxyLink(file, prox, prox_enc_stream),
             subtitles: extract.source.cc ? extract.source.cc.map(function (c) {
-              var url = fixUrl(c.url || '');
+              var url = fixUrl(c.url || '', false);
               return {
                 label: c.name,
                 url: component.processSubs(component.proxyLink(url, prox, prox_enc_stream))
