@@ -8384,405 +8384,306 @@
      */
 
 
+    /**
+     * LordFilm (lordfilm.fi).
+     * По устройству ответа это тот же движок, что уже обслуживает
+     * источник Collaps (api.ortified.ws / api.kinogram.best,
+     * makePlayer({...}), extract.playlist / extract.source,
+     * qualityByWidth, source.audio.{names,order}) — поэтому логика
+     * ниже сознательно повторяет проверенную архитектуру collaps
+     * (та же схема audio_tracks -> translate.tracks, тот же file/
+     * qualityByWidth, тот же контракт Lampa.Player.play), а не
+     * собственный самодельный парсер.
+     */
+
+
     function lordfilm(component, _object) {
       var network = new Lampa.Reguest();
-      var extract = {
-        seasons: [],
-        isMovie: false
-      };
+      var extract = {};
       var object = _object;
       var select_title = '';
+      var prefer_http = Lampa.Storage.field('online_mod_prefer_http') === true;
+      var prox = component.proxy('lordfilm');
+      var base = 'api.ortified.ws';
+      var host = 'https://' + base;
+      var ref = host + '/';
+      var user_agent = Utils.baseUserAgent();
+      var site_host = 'lordfilm.fi';
+      var embed = (prefer_http ? 'http:' : 'https:') + '//' + base + '/embed/';
+      var embed2 = (prefer_http ? 'http:' : 'https:') + '//api.kinogram.best/embed/';
+      var prox_enc = '';
+
+      if (prox) {
+        prox_enc += 'param/User-Agent=' + encodeURIComponent(user_agent) + '/';
+      }
+
+      var prox_enc_stream = prox_enc;
+
+      if (prox) {
+        prox_enc += 'ip/';
+        prox_enc_stream += 'param/Origin=' + encodeURIComponent(host) + '/';
+        prox_enc_stream += 'param/Referer=' + encodeURIComponent(ref) + '/';
+      }
+
+      var play_headers = !prox && Lampa.Platform.is('android') ? {
+        'User-Agent': user_agent,
+        'Origin': host,
+        'Referer': ref
+      } : {};
       var filter_items = {};
       var choice = {
-        season: 0
+        season: 0,
+        voice: 0
       };
-      var API_HOST = 'https://api.ortified.ws';
-      var API_HOST_NAME = 'lordfilm.fi';
-      var API_TIMEOUT = 15000; // Прокси намеренно НЕ используется по умолчанию (тумблер online_mod_proxy_lordfilm = false):
-      // общий CORS-воркер (cors.nb557.workers.dev) заточен под домены остальных
-      // балансеров и на постороннем домене api.ortified.ws отдаёт 422.
-      // component.proxy()/proxyLink() оставлены в коде — если когда-нибудь
-      // понадобится проксировать (например, при гео-блокировке), достаточно
-      // включить тумблер в настройках, ничего в коде менять не придётся.
 
-      var prox = component.proxy('lordfilm');
-      var user_agent = Utils.baseUserAgent();
-      var headers = Lampa.Platform.is('android') ? {
-        'User-Agent': user_agent
-      } : {};
-      var prox_enc = '';
-      if (prox) prox_enc += 'param/User-Agent=' + encodeURIComponent(user_agent) + '/';
+      function api_search(api, callback, error) {
+        network.clear();
+        network.timeout(15000);
+        network["native"](component.proxyLink(embed + api + '?host=' + encodeURIComponent(site_host), prox, prox_enc, 'enc2t'), function (str) {
+          if (callback) callback(str || '');
+        }, function (a, c) {
+          if (a.status == 404 && (!a.responseText || a.responseText.indexOf('видео недоступно') !== -1)) {
+            if (callback) callback('');
+          } else {
+            network.clear();
+            network.timeout(15000);
+            network["native"](component.proxyLink(embed2 + api + '?host=' + encodeURIComponent(site_host), prox, prox_enc, 'enc2t'), function (str) {
+              if (callback) callback(str || '');
+            }, function (a2, c2) {
+              if (a2.status == 404 && (!a2.responseText || a2.responseText.indexOf('видео недоступно') !== -1) || a2.status == 0 && a2.statusText !== 'timeout') {
+                if (callback) callback('');
+              } else if (error) error(network.errorDecode(a2, c2));
+            }, false, {
+              dataType: 'text',
+              headers: play_headers
+            });
+          }
+        }, false, {
+          dataType: 'text',
+          headers: play_headers
+        });
+      }
       /**
-       * Поиск — используем kinopoisk_id напрямую, свою разметку lordfilm.fi не трогаем
+       * Поиск
+       * @param {Object} _object
        */
+
 
       this.search = function (_object, kinopoisk_id) {
         object = _object;
         select_title = object.search || object.movie.title;
-
-        if (!kinopoisk_id || isNaN(kinopoisk_id)) {
-          component.emptyForQuery(select_title);
-          return;
-        }
-
-        getPage(parseInt(kinopoisk_id, 10));
+        var error = component.empty.bind(component);
+        var api = (+kinopoisk_id ? 'kp/' : 'imdb/') + kinopoisk_id;
+        api_search(api, function (str) {
+          if (str) parse(str);else if (!object.clarification && object.movie.imdb_id && kinopoisk_id != object.movie.imdb_id) {
+            api_search('imdb/' + object.movie.imdb_id, function (str2) {
+              if (str2) parse(str2);else component.emptyForQuery(select_title);
+            }, error);
+          } else component.emptyForQuery(select_title);
+        }, error);
       };
 
       this.extendChoice = function (saved) {
         Lampa.Arrays.extend(choice, saved, true);
       };
+      /**
+       * Сброс фильтра
+       */
+
 
       this.reset = function () {
         component.reset();
         choice = {
-          season: 0
+          season: 0,
+          voice: 0
         };
         filter();
         append(filtred());
         component.saveChoice(choice);
       };
+      /**
+       * Применить фильтр
+       */
+
 
       this.filter = function (type, a, b) {
-        if (a && a.stype) choice[a.stype] = b.index;
+        choice[a.stype] = b.index;
         component.reset();
         filter();
         append(filtred());
         component.saveChoice(choice);
       };
+      /**
+       * Уничтожить
+       */
+
 
       this.destroy = function () {
         network.clear();
         extract = null;
       };
-      /**
-       * Запрос к API плеера
-       */
 
-      function getPage(kp_id) {
-        var url = API_HOST + '/embed/kp/' + encodeURIComponent(kp_id) + '?host=' + encodeURIComponent(API_HOST_NAME);
-        component.loading(true);
-        network.clear();
-        network.timeout(API_TIMEOUT);
-        network["native"](component.proxyLink(url, prox, prox_enc, 'enc2t'), function (html) {
-          component.loading(false);
-          var pageData = parsePlayerPage(html);
-
-          if (pageData && pageData.seasons && pageData.seasons.length) {
-            extract = pageData;
-            filter();
-            append(filtred());
-          } else if ((html || '').indexOf('makePlayer(') === -1) {
-            component.empty('LordFilm: сервер не отдал плеер (возможна блокировка/антибот)');
-          } else {
-            component.emptyForQuery(select_title);
-          }
-        }, function (a, c) {
-          component.loading(false);
-          component.empty('LordFilm: ' + network.errorDecode(a, c));
-        }, false, {
-          dataType: 'text',
-          headers: headers
-        });
-      }
-      /**
-       * Поиск сбалансированного [...] или {...} по имени ключа "key: ..."
-       * Отклоняет ложные совпадения (когда после key: идёт не [ / {),
-       * ищет следующее вхождение key, если совпадение не подтвердилось.
-       */
-
-
-      function extractBalanced(str, key, openCh, closeCh) {
-        if (!str || !key) return null;
-        var key_pos = str.indexOf(key);
-
-        while (key_pos !== -1) {
-          var colon = str.indexOf(':', key_pos + key.length);
-          if (colon === -1) return null;
-          var start = colon + 1;
-
-          while (start < str.length && /\s/.test(str.charAt(start))) {
-            start++;
-          }
-
-          if (str.charAt(start) !== openCh) {
-            key_pos = str.indexOf(key, key_pos + key.length);
-            continue;
-          }
-
-          var depth = 0;
-          var quote = '';
-          var escaped = false;
-
-          for (var i = start; i < str.length; i++) {
-            var ch = str.charAt(i);
-
-            if (quote) {
-              if (escaped) escaped = false;else if (ch === '\\') escaped = true;else if (ch === quote) quote = '';
-              continue;
-            }
-
-            if (ch === '"' || ch === "'") {
-              quote = ch;
-              continue;
-            }
-
-            if (ch === openCh) {
-              depth++;
-            } else if (ch === closeCh) {
-              depth--;
-              if (depth === 0) return str.substring(start, i + 1);
-            }
-          }
-
-          return null;
-        }
-
-        return null;
-      }
-
-      function extractBalancedArray(str, key) {
-        return extractBalanced(str, key, '[', ']');
-      }
-
-      function extractBalancedObject(str, key) {
-        return extractBalanced(str, key, '{', '}');
-      }
-
-      function extractStringField(str, key) {
-        var m = str.match(new RegExp('\\b' + key + '\\s*:\\s*"([^"]*)"')) || str.match(new RegExp("\\b" + key + "\\s*:\\s*'([^']*)'"));
-        return m ? m[1] : '';
-      }
-
-      function isValidHls(url) {
-        return typeof url === 'string' && !!url && /\.m3u8(?:$|[?#])/i.test(url);
-      }
-      /**
-       * Разбор ответа плеера.
-       * Вариант 1: сериал — "seasons: [...]" (валидный JSON-массив).
-       * Вариант 2: фильм — "source: {...}" (JS-литерал с неэкранированными
-       * ключами: hls/dash/audio/cc), заворачивается в тот же формат seasons,
-       * чтобы дальше по коду (filter/filtred/getStream) всё было единообразно.
-       */
-
-
-      function parseSeries(str) {
-        var arrayStr = extractBalancedArray(str, 'seasons');
-        if (!arrayStr) return null;
-        var seasons;
+      function parse(str) {
+        component.loading(false);
+        str = (str || '').replace(/[\r\n]/g, '');
+        var find = str.match(/makePlayer\(({.*?})\);/);
+        var json;
 
         try {
-          seasons = JSON.parse(arrayStr);
-        } catch (e) {
-          try {
-            seasons = JSON.parse(arrayStr.replace(/\\"/g, '"'));
-          } catch (e2) {
-            return null;
-          }
-        }
-
-        if (!seasons || !seasons.forEach) return null;
-        var result = [];
-        seasons.forEach(function (season, season_index) {
-          if (!season || season.blocked) return;
-          var season_num = parseInt(season.season != null ? season.season : season_index + 1, 10);
-          if (isNaN(season_num)) season_num = season_index + 1;
-          var episodes = season.episodes || [];
-          if (!episodes.forEach) return;
-          var valid_episodes = [];
-          episodes.forEach(function (episode, episode_index) {
-            if (!episode || !isValidHls(episode.hls)) return;
-            var episode_num = parseInt(episode.episode != null ? episode.episode : episode_index + 1, 10);
-            if (isNaN(episode_num)) episode_num = episode_index + 1;
-            var normalized = {};
-
-            for (var key in episode) {
-              normalized[key] = episode[key];
-            }
-
-            normalized.episode = episode_num;
-            valid_episodes.push(normalized);
-          });
-          if (valid_episodes.length) result.push({
-            season: season_num,
-            title: season.title || '',
-            episodes: valid_episodes
-          });
-        });
-        if (!result.length) return null;
-        result.sort(function (a, b) {
-          return a.season - b.season;
-        });
-        return result;
-      }
-
-      function parseMovie(str) {
-        var srcObj = extractBalancedObject(str, 'source');
-        if (!srcObj) return null;
-        var hls = extractStringField(srcObj, 'hls');
-        if (!isValidHls(hls)) return null;
-        var audio = {
-          names: []
-        };
-        var audioObj = extractBalancedObject(srcObj, 'audio');
-
-        if (audioObj) {
-          try {
-            audio = JSON.parse(audioObj);
-          } catch (e) {}
-        }
-
-        var cc = [];
-        var ccArr = extractBalancedArray(srcObj, 'cc');
-
-        if (ccArr) {
-          try {
-            cc = JSON.parse(ccArr);
-          } catch (e) {}
-        }
-
-        var title = extractStringField(str, 'title');
-        return [{
-          season: 0,
-          title: '',
-          episodes: [{
-            episode: '1',
-            hls: hls,
-            audio: audio,
-            cc: cc,
-            title: title
-          }]
-        }];
-      }
-
-      function parsePlayerPage(html) {
-        if (!html) return null;
-        var str = String(html).replace(/\r/g, '');
-        var seasons = null;
-        var isMovie = false; // Вариант 0: сам endpoint вдруг стал отдавать чистый JSON
-
-        try {
-          var direct = JSON.parse(str);
-          if (direct && direct.seasons && direct.seasons.forEach) seasons = direct.seasons;else if (direct && direct.player && direct.player.seasons && direct.player.seasons.forEach) seasons = direct.player.seasons;
+          json = find && (0, eval)('"use strict"; (' + find[1] + ');');
         } catch (e) {}
 
-        if (!seasons) seasons = parseSeries(str);
+        if (json) {
+          extract = json;
 
-        if (!seasons) {
-          seasons = parseMovie(str);
-          isMovie = true;
-        }
+          if (extract.playlist && extract.playlist.seasons) {
+            extract.playlist.seasons.sort(function (a, b) {
+              return a.season - b.season;
+            });
+          }
 
-        if (!seasons || !seasons.length) return null;
-        return {
-          seasons: seasons,
-          isMovie: isMovie
-        };
+          filter();
+          append(filtred());
+        } else component.emptyForQuery(select_title);
       }
       /**
-       * Субтитры
+       * Построить фильтр
        */
 
 
-      function parseSubtitles(episode) {
-        if (!episode) return false;
-        var tracks = episode.subtitles || episode.subtitle || episode.cc || [];
-        if (!tracks) return false;
-        if (typeof tracks === 'string') return [{
-          label: 'Русский',
-          url: tracks
-        }];
-        if (!tracks.forEach) return false;
-        var subtitles = [];
-        tracks.forEach(function (track) {
-          if (!track) return;
-          var url = track.url || track.src || track.file || '';
-          if (!url) return;
-          subtitles.push({
-            label: track.name || track.label || track.lang || track.language || 'Subtitle',
-            url: url
-          });
-        });
-        return subtitles.length ? subtitles : false;
-      }
-
       function filter() {
-        if (extract.isMovie) {
-          filter_items = {};
-          component.filter(filter_items, choice);
-          return;
+        filter_items = {
+          season: [],
+          voice: []
+        };
+
+        if (extract.playlist && extract.playlist.seasons) {
+          extract.playlist.seasons.forEach(function (season) {
+            filter_items.season.push(Lampa.Lang.translate('torrent_serial_season') + ' ' + season.season);
+          });
         }
 
-        filter_items = {
-          season: extract.seasons.map(function (s) {
-            return Lampa.Lang.translate('torrent_serial_season') + ' ' + s.season;
-          })
-        };
         if (!filter_items.season[choice.season]) choice.season = 0;
         component.filter(filter_items, choice);
       }
 
-      function filtred() {
-        var items = [];
-        if (!extract || !extract.seasons) return items;
-
-        if (extract.isMovie) {
-          var movie_season = extract.seasons[0];
-          if (!movie_season) return items;
-          movie_season.episodes.forEach(function (ep) {
-            items.push({
-              title: ep.title || select_title,
-              quality: '360p ~ 1080p',
-              info: ep.audio && ep.audio.names && ep.audio.names.length ? ' / ' + Lampa.Utils.shortText(ep.audio.names.join(', '), 50) : '',
-              media: ep,
-              subtitles: parseSubtitles(ep)
-            });
-          });
-          return items;
-        }
-
-        var season = extract.seasons[choice.season];
-        if (!season) return items;
-        season.episodes.forEach(function (ep) {
-          items.push({
-            title: component.formatEpisodeTitle(season.season, parseInt(ep.episode, 10), ep.title),
-            quality: '360p ~ 1080p',
-            info: ep.audio && ep.audio.names && ep.audio.names.length ? ' / ' + Lampa.Utils.shortText(ep.audio.names.join(', '), 50) : '',
-            season: season.season,
-            episode: parseInt(ep.episode, 10),
-            media: ep,
-            subtitles: parseSubtitles(ep)
-          });
-        });
-        return items;
+      function fixUrl(url) {
+        url = url || '';
+        url = component.fixLinkProtocol(url, prefer_http);
+        return url;
       }
       /**
-       * Поток — HLS-ссылку не проксируем (API уже отдаёт готовый прямой урл,
-       * а общий CORS-воркер под это не рассчитан и может сломать относительные
-       * сегменты внутри m3u8-манифеста)
+       * Отфильтровать файлы
+       * @returns array
        */
 
 
-      function getStream(element, call, error) {
-        if (element.stream) return call(element);
-        var ep = element.media;
-        if (!ep || !isValidHls(ep.hls)) return error();
-        element.stream = Utils.fixLinkProtocol(ep.hls, Lampa.Storage.field('online_mod_prefer_http') === true, true);
-        element.qualitys = false;
-        if (!element.subtitles) element.subtitles = parseSubtitles(ep);
-        call(element);
+      function filtred() {
+        var filtred = [];
+
+        if (extract.playlist) {
+          extract.playlist.seasons.forEach(function (season, i) {
+            if (i == choice.season) {
+              season.episodes.forEach(function (episode) {
+                var audio_tracks = (episode.audio && episode.audio.names || []).map(function (name) {
+                  return {
+                    language: name
+                  };
+                });
+                var audio_infos = (episode.audio && episode.audio.names || []).map(function (name, index) {
+                  var order = episode.audio && episode.audio.order && episode.audio.order[index];
+                  return {
+                    name: name,
+                    order: order != null ? order : 1000
+                  };
+                });
+                audio_infos.sort(function (a, b) {
+                  return a.order - b.order;
+                });
+                var audio_names = audio_infos.map(function (a) {
+                  return a.name;
+                }).filter(function (name) {
+                  return name && name !== 'delete';
+                });
+                var file = fixUrl(episode.hls || '');
+                filtred.push({
+                  title: episode.title,
+                  quality: '360p ~ 1080p',
+                  info: audio_names.length ? ' / ' + component.uniqueNamesShortText(audio_names, 80) : '',
+                  season: season.season,
+                  episode: parseInt(episode.episode),
+                  file: component.proxyLink(file, prox, prox_enc_stream),
+                  subtitles: episode.cc ? episode.cc.map(function (c) {
+                    var url = fixUrl(c.url || '');
+                    return {
+                      label: c.name,
+                      url: component.processSubs(component.proxyLink(url, prox, prox_enc_stream))
+                    };
+                  }) : false,
+                  audio_tracks: audio_tracks.length ? audio_tracks : false
+                });
+              });
+            }
+          });
+        } else if (extract.source) {
+          var max_quality = 0;
+          extract.qualityByWidth && Lampa.Arrays.getKeys(extract.qualityByWidth).forEach(function (resolution) {
+            var quality = extract.qualityByWidth[resolution] || 0;
+            if (quality > 720) quality = 0;
+            if (quality > max_quality) max_quality = quality;
+          });
+          var audio_tracks = (extract.source.audio && extract.source.audio.names || []).map(function (name) {
+            return {
+              language: name
+            };
+          });
+          var audio_infos = (extract.source.audio && extract.source.audio.names || []).map(function (name, index) {
+            var order = extract.source.audio && extract.source.audio.order && extract.source.audio.order[index];
+            return {
+              name: name,
+              order: order != null ? order : 1000
+            };
+          });
+          audio_infos.sort(function (a, b) {
+            return a.order - b.order;
+          });
+          var audio_names = audio_infos.map(function (a) {
+            return a.name;
+          }).filter(function (name) {
+            return name && name !== 'delete';
+          });
+          var file = fixUrl(extract.source.hls || '');
+          filtred.push({
+            title: extract.title || select_title,
+            quality: max_quality ? max_quality + 'p' : '360p ~ 720p',
+            info: audio_names.length ? ' / ' + component.uniqueNamesShortText(audio_names, 80) : '',
+            file: component.proxyLink(file, prox, prox_enc_stream),
+            subtitles: extract.source.cc ? extract.source.cc.map(function (c) {
+              var url = fixUrl(c.url || '');
+              return {
+                label: c.name,
+                url: component.processSubs(component.proxyLink(url, prox, prox_enc_stream))
+              };
+            }) : false,
+            audio_tracks: audio_tracks.length ? audio_tracks : false
+          });
+        }
+
+        return filtred;
       }
+      /**
+       * Показать файлы
+       */
+
 
       function append(items) {
         component.reset();
         var viewed = Lampa.Storage.cache('online_view', 5000, []);
-        var last_episode = component.getLastEpisode(items);
         items.forEach(function (element) {
-          if (element.season) element.translate_episode_end = last_episode;
-          var original_title = object.movie.original_title || object.movie.original_name || select_title;
-          var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, original_title].join('') : original_title);
+          var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
           var view = Lampa.Timeline.view(hash);
           var item = Lampa.Template.get('online_mod', element);
-          var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, original_title].join('') : original_title + element.title);
+          var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.title].join('') : object.movie.original_title + 'lordfilm');
           element.timeline = view;
           item.append(Lampa.Timeline.render(view));
 
@@ -8791,59 +8692,50 @@
           }
 
           if (viewed.indexOf(hash_file) !== -1) item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
-          item.on('hover:enter', function () {
-            if (element.loading) return;
+          item.on('hover:enter', function (event, options) {
             if (object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
-            element.loading = true;
-            getStream(element, function (element) {
-              element.loading = false;
-              var first = {
-                url: component.getDefaultQuality(element.qualitys, element.stream),
-                quality: component.renameQualityMap(element.qualitys),
-                subtitles: element.subtitles,
-                timeline: element.timeline,
-                title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
-              };
-              Lampa.Player.play(first);
 
-              if (element.season && Lampa.Platform.version) {
-                var playlist = [];
+            if (element.file) {
+              var playlist = [];
+              var first = {
+                url: component.getDefaultQuality(null, element.file),
+                subtitles: element.subtitles,
+                translate: {
+                  tracks: element.audio_tracks
+                },
+                timeline: element.timeline,
+                title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title),
+                headers: play_headers
+              };
+
+              if (element.season) {
                 items.forEach(function (elem) {
-                  if (elem == element) {
-                    playlist.push(first);
-                  } else {
-                    var cell = {
-                      url: function url(call) {
-                        getStream(elem, function (elem) {
-                          cell.url = component.getDefaultQuality(elem.qualitys, elem.stream);
-                          cell.quality = component.renameQualityMap(elem.qualitys);
-                          cell.subtitles = elem.subtitles;
-                          call();
-                        }, function () {
-                          cell.url = '';
-                          call();
-                        });
-                      },
-                      timeline: elem.timeline,
-                      title: elem.title
-                    };
-                    playlist.push(cell);
-                  }
+                  playlist.push({
+                    url: component.getDefaultQuality(null, elem.file),
+                    subtitles: elem.subtitles,
+                    translate: {
+                      tracks: elem.audio_tracks
+                    },
+                    timeline: elem.timeline,
+                    title: elem.title,
+                    headers: play_headers
+                  });
                 });
-                Lampa.Player.playlist(playlist);
               } else {
-                Lampa.Player.playlist([first]);
+                playlist.push(first);
               }
+
+              if (playlist.length > 1) first.playlist = playlist;
+              if (options && options.runas) Lampa.Player.runas(options.runas);
+              Lampa.Player.play(first);
+              Lampa.Player.playlist(playlist);
 
               if (viewed.indexOf(hash_file) == -1) {
                 viewed.push(hash_file);
                 item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
                 Lampa.Storage.set('online_view', viewed);
               }
-            }, function () {
-              element.loading = false;
-              Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
-            });
+            } else Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
           });
           component.append(item);
           component.contextmenu({
@@ -8851,15 +8743,9 @@
             view: view,
             viewed: viewed,
             hash_file: hash_file,
-            element: element,
             file: function file(call) {
-              getStream(element, function (element) {
-                call({
-                  file: element.stream,
-                  quality: element.qualitys
-                });
-              }, function () {
-                Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
+              call({
+                file: element.file
               });
             }
           });
@@ -8867,7 +8753,6 @@
         component.start(true);
       }
     }
-
 
     function redheadsound(component, _object, prefer_dash) {
       var network = new Lampa.Reguest();
