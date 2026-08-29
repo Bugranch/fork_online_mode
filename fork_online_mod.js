@@ -8426,10 +8426,10 @@
       }
 
       var play_headers = !prox && Lampa.Platform.is('android') ? {
-    'User-Agent': user_agent,
-    'Origin': host,
-    'Referer': ref
-} : {};
+        'User-Agent': user_agent,
+        'Origin': host,
+        'Referer': ref
+      } : {};
       var filter_items = {};
       var choice = {
         season: 0,
@@ -8699,6 +8699,27 @@
           if (viewed.indexOf(hash_file) !== -1) item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
           item.on('hover:enter', function (event, options) {
             if (object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
+            // ВРЕМЕННАЯ ДИАГНОСТИКА: скачиваем сам .m3u8 (element.file) как текст
+            // и показываем на экране Lampa, ничего не проигрывая. Не трогает
+            // filter/audio_tracks/append/headers/proxy - только проверяет шаг
+            // "file -> GET .m3u8 -> ???". После проверки поставьте false.
+            var LORDFILM_DEBUG_M3U8 = true;
+
+            if (LORDFILM_DEBUG_M3U8 && element.file) {
+              var debug_net = new Lampa.Reguest();
+              debug_net.timeout(15000);
+              debug_net["native"](element.file, function (m3u8_body) {
+                var body = m3u8_body || '(\u043f\u0443\u0441\u0442\u043e\u0439 \u043e\u0442\u0432\u0435\u0442)';
+                component.empty('LordFilm m3u8 [' + body.length + ' \u0431\u0430\u0439\u0442]:\n' + body.slice(0, 1200));
+              }, function (a, c) {
+                component.empty('LordFilm m3u8 ERROR: ' + debug_net.errorDecode(a, c));
+              }, false, {
+                dataType: 'text',
+                headers: play_headers
+              });
+              return;
+            }
+
 
             if (element.file) {
               var playlist = [];
