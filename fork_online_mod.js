@@ -8699,19 +8699,39 @@
           if (viewed.indexOf(hash_file) !== -1) item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
           item.on('hover:enter', function (event, options) {
             if (object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
-            // ВРЕМЕННАЯ ДИАГНОСТИКА (шаг 1, уже подтверждено: manifest 2739 байт,
-            // #EXTM3U/#EXT-X-MEDIA приходит корректно) - выключено.
-            // Шаг 2: убрали translate.tracks и playlist, headers принудительно {},
-            // чтобы изолированно проверить сам плеер на голом .m3u8.
+            // ВРЕМЕННАЯ ДИАГНОСТИКА, шаг 3: снова смотрим полный master m3u8,
+            // но теперь через модалку со скроллом + автокопирование в буфер
+            // по OK, чтобы не зависеть от того, влезает текст на экран или нет.
+            // Player ниже НЕ трогаем - конфигурация та же, что и просили
+            // (без translate, без playlist, headers: {}).
 
-            var LORDFILM_DEBUG_M3U8 = false;
+            var LORDFILM_DEBUG_M3U8 = true;
 
             if (LORDFILM_DEBUG_M3U8 && element.file) {
               var debug_net = new Lampa.Reguest();
               debug_net.timeout(15000);
               debug_net["native"](element.file, function (m3u8_body) {
                 var body = m3u8_body || '(\u043f\u0443\u0441\u0442\u043e\u0439 \u043e\u0442\u0432\u0435\u0442)';
-                component.empty('LordFilm m3u8 [' + body.length + ' \u0431\u0430\u0439\u0442]:\n' + body.slice(0, 4000));
+
+                var escape_html = function (s) {
+                  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                };
+
+                var modal_html = $('<div style="max-height:70vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;font-size:0.7em;line-height:1.4;">' + escape_html(body) + '</div>');
+                Lampa.Modal.open({
+                  title: 'LordFilm m3u8 [' + body.length + ' \u0431\u0430\u0439\u0442, OK = \u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c]',
+                  html: modal_html,
+                  onSelect: function () {
+                    Lampa.Utils.copyTextToClipboard(body, function () {
+                      Lampa.Noty.show('\u0421\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u0432 \u0431\u0443\u0444\u0435\u0440 \u043e\u0431\u043c\u0435\u043d\u0430');
+                    }, function () {
+                      Lampa.Noty.show('\u041e\u0448\u0438\u0431\u043a\u0430 \u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f');
+                    });
+                  },
+                  onBack: function () {
+                    Lampa.Modal.close();
+                  }
+                });
               }, function (a, c) {
                 component.empty('LordFilm m3u8 ERROR: ' + debug_net.errorDecode(a, c));
               }, false, {
