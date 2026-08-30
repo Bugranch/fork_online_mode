@@ -8705,7 +8705,7 @@
             // Player ниже НЕ трогаем - конфигурация та же, что и просили
             // (без translate, без playlist, headers: {}).
 
-            var LORDFILM_DEBUG_M3U8 = true;
+            var LORDFILM_DEBUG_M3U8 = false;
 
             if (LORDFILM_DEBUG_M3U8 && element.file) {
               var debug_net = new Lampa.Reguest();
