@@ -8785,13 +8785,39 @@
               }
 
               if (element.file) {
-                Lampa.Player.play({
+                var play_object = {
                   url: element.file,
                   subtitles: element.subtitles,
                   timeline: element.timeline,
                   title: element.title,
                   headers: {}
-                });
+                };
+                // ВРЕМЕННАЯ ДИАГНОСТИКА: показываем и копируем в буфер РОВНО то,
+                // что уходит в Lampa.Player.play() - без изменений, только для
+                // наблюдения. Сам плей ниже вызывается как обычно, не блокируется.
+
+                var LORDFILM_DEBUG_PLAY_OBJECT = true;
+
+                if (LORDFILM_DEBUG_PLAY_OBJECT) {
+                  var dump = JSON.stringify(play_object, null, 2);
+                  Lampa.Utils.copyTextToClipboard(dump, function () {}, function () {});
+                  var escape_html = function (s) {
+                    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                  };
+                  var modal_html = $('<div style="max-height:70vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;font-size:0.65em;line-height:1.4;">' + escape_html(dump) + '</div>');
+                  Lampa.Modal.open({
+                    title: 'LordFilm Player.play() [\u0441\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438]',
+                    html: modal_html,
+                    onSelect: function () {
+                      Lampa.Modal.close();
+                    },
+                    onBack: function () {
+                      Lampa.Modal.close();
+                    }
+                  });
+                }
+
+                Lampa.Player.play(play_object);
 
                 if (viewed.indexOf(hash_file) == -1) {
                   viewed.push(hash_file);
