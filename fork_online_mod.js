@@ -8435,6 +8435,7 @@
         season: 0,
         voice: 0
       };
+      var last_api = '';
 
       function api_search(api, callback, error) {
         network.clear();
@@ -8474,9 +8475,11 @@
         select_title = object.search || object.movie.title;
         var error = component.empty.bind(component);
         var api = (+kinopoisk_id ? 'kp/' : 'imdb/') + kinopoisk_id;
+        last_api = api;
         api_search(api, function (str) {
           if (str) parse(str);else if (!object.clarification && object.movie.imdb_id && kinopoisk_id != object.movie.imdb_id) {
-            api_search('imdb/' + object.movie.imdb_id, function (str2) {
+            last_api = 'imdb/' + object.movie.imdb_id;
+            api_search(last_api, function (str2) {
               if (str2) parse(str2);else component.emptyForQuery(select_title);
             }, error);
           } else component.emptyForQuery(select_title);
@@ -8523,8 +8526,13 @@
         extract = null;
       };
 
-      function parse(str) {
-        component.loading(false);
+      /**
+       * Чистый разбор ответа API в JSON, без побочных эффектов на UI.
+       * Используется и при первом поиске, и при рефетче перед плеем.
+       */
+
+
+      function parseJson(str) {
         str = (str || '').replace(/[\r\n]/g, '');
         var find = str.match(/makePlayer\(({.*?})\);/);
         var json;
@@ -8533,15 +8541,21 @@
           json = find && (0, eval)('"use strict"; (' + find[1] + ');');
         } catch (e) {}
 
+        if (json && json.playlist && json.playlist.seasons) {
+          json.playlist.seasons.sort(function (a, b) {
+            return a.season - b.season;
+          });
+        }
+
+        return json || null;
+      }
+
+      function parse(str) {
+        component.loading(false);
+        var json = parseJson(str);
+
         if (json) {
           extract = json;
-
-          if (extract.playlist && extract.playlist.seasons) {
-            extract.playlist.seasons.sort(function (a, b) {
-              return a.season - b.season;
-            });
-          }
-
           filter();
           append(filtred());
         } else component.emptyForQuery(select_title);
@@ -8569,14 +8583,69 @@
 
       function fixUrl(url, add) {
         url = url || '';
-        // ВРЕМЕННО для теста LordFilm: &vp скопирован из
-        // collaps "на всякий случай", но не факт, что нужен LordFilm. Проверяем без него.
-
-        // if (url && add) {
-        //   url += atob('JnZw');
-        // }
+        // Проверено: &vp (из collaps) не требуется этому API - убран насовсем.
         url = component.fixLinkProtocol(url, prefer_http, true);
         return url;
+      }
+      /**
+       * Собрать готовый элемент (file/subtitles/audio_tracks) из "сырого"
+       * episode-объекта API (либо extract.source для фильма).
+       */
+
+
+      function buildFileFromRaw(raw) {
+        var audio_tracks = (raw.audio && raw.audio.names || []).map(function (name) {
+          return {
+            language: name
+          };
+        });
+        var file = fixUrl(raw.hls || '', true);
+        return {
+          file: component.proxyLink(file, prox, prox_enc_stream),
+          subtitles: raw.cc ? raw.cc.map(function (c) {
+            var url = fixUrl(c.url || '', false);
+            return {
+              label: c.name,
+              url: component.processSubs(component.proxyLink(url, prox, prox_enc_stream))
+            };
+          }) : false,
+          audio_tracks: audio_tracks.length ? audio_tracks : false
+        };
+      }
+      /**
+       * Рефетч API прямо перед плеем: ссылки живут ограниченное время,
+       * поэтому ту, что показывается в списке, использовать нельзя -
+       * нужна свежая, полученная как можно ближе к моменту запуска.
+       * @param {Object} target {season, episode} для сериала, {} для фильма
+       */
+
+
+      function refreshBeforePlay(target, done) {
+        if (!last_api) return done(null);
+        component.loading(true);
+        api_search(last_api, function (str) {
+          component.loading(false);
+          var json = parseJson(str);
+          if (!json) return done(null);
+          var raw = null;
+
+          if (json.playlist && target.season != null) {
+            json.playlist.seasons.forEach(function (season) {
+              if (season.season === target.season) {
+                season.episodes.forEach(function (ep) {
+                  if (parseInt(ep.episode, 10) === target.episode) raw = ep;
+                });
+              }
+            });
+          } else if (json.source) {
+            raw = json.source;
+          }
+
+          done(raw ? buildFileFromRaw(raw) : null);
+        }, function () {
+          component.loading(false);
+          done(null);
+        });
       }
       /**
        * Отфильтровать файлы
@@ -8700,63 +8769,37 @@
           if (viewed.indexOf(hash_file) !== -1) item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
           item.on('hover:enter', function (event, options) {
             if (object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
-            // ВРЕМЕННАЯ ДИАГНОСТИКА, шаг 3: снова смотрим полный master m3u8,
-            // но теперь через модалку со скроллом + автокопирование в буфер
-            // по OK, чтобы не зависеть от того, влезает текст на экран или нет.
-            // Player ниже НЕ трогаем - конфигурация та же, что и просили
-            // (без translate, без playlist, headers: {}).
+            if (element.loading) return;
+            element.loading = true;
+            var target = element.season ? {
+              season: element.season,
+              episode: element.episode
+            } : {};
+            refreshBeforePlay(target, function (fresh) {
+              element.loading = false;
 
-            var LORDFILM_DEBUG_M3U8 = false;
-
-            if (LORDFILM_DEBUG_M3U8 && element.file) {
-              var debug_net = new Lampa.Reguest();
-              debug_net.timeout(15000);
-              debug_net["native"](element.file, function (m3u8_body) {
-                var body = m3u8_body || '(\u043f\u0443\u0441\u0442\u043e\u0439 \u043e\u0442\u0432\u0435\u0442)';
-
-                var escape_html = function (s) {
-                  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                };
-
-                var modal_html = $('<div style="max-height:70vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;font-size:0.7em;line-height:1.4;">' + escape_html(body) + '</div>');
-                Lampa.Modal.open({
-                  title: 'LordFilm m3u8 [' + body.length + ' \u0431\u0430\u0439\u0442, OK = \u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c]',
-                  html: modal_html,
-                  onSelect: function () {
-                    Lampa.Utils.copyTextToClipboard(body, function () {
-                      Lampa.Noty.show('\u0421\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u0432 \u0431\u0443\u0444\u0435\u0440 \u043e\u0431\u043c\u0435\u043d\u0430');
-                    }, function () {
-                      Lampa.Noty.show('\u041e\u0448\u0438\u0431\u043a\u0430 \u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f');
-                    });
-                  },
-                  onBack: function () {
-                    Lampa.Modal.close();
-                  }
-                });
-              }, function (a, c) {
-                component.empty('LordFilm m3u8 ERROR: ' + debug_net.errorDecode(a, c));
-              }, false, {
-                dataType: 'text',
-                headers: play_headers
-              });
-              return;
-            }
-
-            if (element.file) {
-              Lampa.Player.play({
-                url: element.file,
-                subtitles: element.subtitles,
-                timeline: element.timeline,
-                title: element.title,
-                headers: {}
-              });
-
-              if (viewed.indexOf(hash_file) == -1) {
-                viewed.push(hash_file);
-                item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
-                Lampa.Storage.set('online_view', viewed);
+              if (fresh && fresh.file) {
+                element.file = fresh.file;
+                element.subtitles = fresh.subtitles;
+                element.audio_tracks = fresh.audio_tracks;
               }
-            } else Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
+
+              if (element.file) {
+                Lampa.Player.play({
+                  url: element.file,
+                  subtitles: element.subtitles,
+                  timeline: element.timeline,
+                  title: element.title,
+                  headers: {}
+                });
+
+                if (viewed.indexOf(hash_file) == -1) {
+                  viewed.push(hash_file);
+                  item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
+                  Lampa.Storage.set('online_view', viewed);
+                }
+              } else Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
+            });
           });
           component.append(item);
           component.contextmenu({
