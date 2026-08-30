@@ -8569,11 +8569,12 @@
 
       function fixUrl(url, add) {
         url = url || '';
+        // ВРЕМЕННО для теста LordFilm: &vp скопирован из
+        // collaps "на всякий случай", но не факт, что нужен LordFilm. Проверяем без него.
 
-        if (url && add) {
-          url += atob('JnZw');
-        }
-
+        // if (url && add) {
+        //   url += atob('JnZw');
+        // }
         url = component.fixLinkProtocol(url, prefer_http, true);
         return url;
       }
