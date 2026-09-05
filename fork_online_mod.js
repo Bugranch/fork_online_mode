@@ -8792,6 +8792,9 @@
                 Lampa.Player.play({
                   url: element.file,
                   subtitles: element.subtitles,
+                  translate: {
+                    tracks: element.audio_tracks
+                  },
                   timeline: element.timeline,
                   title: element.title,
                   headers: {},
