@@ -8794,7 +8794,8 @@
                   subtitles: element.subtitles,
                   timeline: element.timeline,
                   title: element.title,
-                  headers: {}
+                  headers: {},
+                  hls_manifest_timeout: 20000
                 });
 
                 if (viewed.indexOf(hash_file) == -1) {
